@@ -32,9 +32,14 @@ import cairo
 from collections import namedtuple
 Rect = namedtuple('Rectangle', 'x y width height')
 
+#LINEAR_COLORS = [
+#                 (1.0, 0.9176470588235294, 0.5764705882352941),
+#                 (1.0, 0.8392156862745098, 0.19215686274509805)]
+
 LINEAR_COLORS = [
-                 (1.0, 0.9176470588235294, 0.5764705882352941),
-                 (1.0, 0.8392156862745098, 0.19215686274509805)]
+                 (0.0, 0.0, 0.5),
+                 (0.75, 0.0, 0.0)]
+
 
 LINEAR_POS = [0.3, 0.8]
 
@@ -124,19 +129,20 @@ class SpectrumPlayer(Gtk.DrawingArea):
         
         # init
         self.spect_height = 100
-        self.spect_bands = 64
+        self.spect_bands = 16
         self.spect_atom = 64.0
         self.height_scale = 1.0
-        self.band_width = 6
+        self.band_width = 32
         self.band_interval = 3
         self.spect_data = None
+        self.threshold = -60
         
         self.spectrum = Gst.ElementFactory.make("spectrum", "spectrum")
         self.spectrum.set_property("bands", self.spect_bands)
-        self.spectrum.set_property("threshold", -80)
+        self.spectrum.set_property("threshold", self.threshold) # default -60
         self.spectrum.set_property("post-messages", True)
         self.spectrum.set_property('message-magnitude', True)
-        
+
         self.connect("spectrum-data-found", self.on_event_load_spect)
         
         self.set_size_request(self.adjust_width, self.spect_height)
@@ -146,11 +152,15 @@ class SpectrumPlayer(Gtk.DrawingArea):
         self.drag_flag = False
         self.mouse_x = self.mouse_y = 0
         self.old_x = self.old_y = 0
-        
+
+        self.max_magnitude = []
+        Gdk.threads_add_timeout(GLib.PRIORITY_DEFAULT_IDLE, 100, self.max_levels, None)
+
     def initialise(self, shell):
         player = shell.props.shell_player.props.player
         player.add_filter(self.spectrum)
-        
+
+        print (player)
         if not player.props.playbin:
             player.connect('notify', self.on_player_notify)     
         else:
@@ -164,12 +174,12 @@ class SpectrumPlayer(Gtk.DrawingArea):
             
             if name == "spectrum":
                 waittime = 0
-                if s.has_field("running_time") and s.has_field("duration"):
-                    timestamp = s.get_value("running_time")
-                    duration = s.get_value("duration")
-                    waittime = timestamp + duration / 2
-                elif s.has_field("endtime"):
-                    waittime = s.get_value("endtime")
+                #if s.has_field("running_time") and s.has_field("duration"):
+                #    timestamp = s.get_value("running_time")
+                #    duration = s.get_value("duration")
+                #    waittime = timestamp + duration / 2
+                if s.has_field("stream-time") and s.has_field("duration"):
+                    waittime = s.get_value("stream-time") + s.get_value("duration")
                     
                 if waittime:
                     # workaround bug where the magnitude field is a type not understood in python
@@ -194,15 +204,27 @@ class SpectrumPlayer(Gtk.DrawingArea):
     @property
     def adjust_width(self):
         return (self.band_width + self.band_interval) * self.spect_bands
+
+    def max_levels(self, *args):
+        if len(self.max_magnitude) == 0:
+            return
+
+        max_value = self.threshold * self.height_scale
+        for i in range(int(self.spect_bands)):
+
+            if self.max_magnitude[i] > max_value:
+                print (self.max_magnitude[i])
+                self.max_magnitude[i] -= 1
+
+        return True
         
-    #def on_expose_event(self, widget, event):
     def draw_cb(self, widget, cr):
         rect = widget.get_allocation()
         
         cr.set_operator(cairo.OPERATOR_SOURCE)
         #cr.set_source_rgba(1.0, 1.0, 1.0, 0.0)
         context = self.get_toplevel().get_style_context()
-        bg_colour = context.get_color(Gtk.StateFlags.NORMAL)
+        bg_colour = context.get_background_color(Gtk.StateFlags.NORMAL)
         Gdk.cairo_set_source_rgba(cr, bg_colour)
         cr.rectangle(0, 0, rect.width, rect.height)
         cr.fill()
@@ -214,20 +236,39 @@ class SpectrumPlayer(Gtk.DrawingArea):
         
     def delayed_idle_spectrum_update(self, spect):
         self.spect_data = spect
+        for i in range(int(self.spect_bands)):
+            if -spect[i] < -self.max_magnitude[i]:
+                self.max_magnitude[i] = spect[i]
+
         self.queue_draw()
         
         return False
     
     def on_event_load_spect(self, obj, magnitude_list):
         spect = [i * self.height_scale for i in magnitude_list]
+
+        #AUDIOFREQ=32000.0
+        #for i in range(int(self.spect_bands)):
+        #    freq = ((AUDIOFREQ / 2) * i + AUDIOFREQ / 4) / self.spect_bands
+        #    mag = magnitude_list[i]
+
+        #    print ('band %d freq %g mag %f' % (i, freq, mag))
+
         GLib.idle_add(self.delayed_idle_spectrum_update, spect)
     
     def on_configure_event(self, widget, event):
+        print ("on_configure_event")
         self.spect_height = event.height
         self.height_scale = event.height / self.spect_atom
         self.spect_bands = event.width / (self.band_width + self.band_interval)
         
         self.spectrum.set_property("bands", int(self.spect_bands))
+
+        self.max_magnitude=[]
+        print (self.height_scale)
+        for i in range(int(self.spect_bands)):
+            self.max_magnitude.append(self.threshold * self.height_scale)
+
         return False
     
     def draw_spectrum(self, cr):
@@ -235,12 +276,18 @@ class SpectrumPlayer(Gtk.DrawingArea):
         data = self.spect_data
         if data:
             for i in range(int(self.spect_bands)):
-                print (i)
                 cr.push_group()
-                cr.set_source_rgb(1, 1, 1)
+                cr.set_source_rgb(0, 1, 1)
                 rect = Rect(start, -data[i], self.band_width, self.spect_height + data[i])
 
-                
+                cr.set_line_width(1.5)
+                min_pos = 0
+                cr.move_to(start, min_pos  - self.max_magnitude[i])
+                cr.line_to(start + self.band_width, min_pos - self.max_magnitude[i])
+                cr.stroke()
+
+                rect = Rect(start, -data[i], self.band_width, self.spect_height + data[i])
+
                 pattern = cairo.LinearGradient(rect.x, rect.y, rect.x, rect.y + rect.height)
                 for i, each_linear in enumerate(LINEAR_COLORS):
                     pattern.add_color_stop_rgb(LINEAR_POS[i],
