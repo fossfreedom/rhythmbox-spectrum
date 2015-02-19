@@ -18,6 +18,8 @@
 
 # define plugin
 
+from collections import namedtuple
+
 from gi.repository import Gtk
 from gi.repository import Gst
 from gi.repository import GLib
@@ -25,21 +27,21 @@ from gi.repository import GObject
 from gi.repository import Peas
 from gi.repository import Gdk
 from gi.repository import RB
-from spectrum_rb3compat import ActionGroup
-from spectrum_rb3compat import ApplicationShell
 import cairo
 
-from collections import namedtuple
+from spectrum_rb3compat import ActionGroup
+from spectrum_rb3compat import ApplicationShell
+
+
 Rect = namedtuple('Rectangle', 'x y width height')
 
-#LINEAR_COLORS = [
+# LINEAR_COLORS = [
 #                 (1.0, 0.9176470588235294, 0.5764705882352941),
 #                 (1.0, 0.8392156862745098, 0.19215686274509805)]
 
 LINEAR_COLORS = [
-                 (0.0, 0.0, 0.5),
-                 (0.75, 0.0, 0.0)]
-
+    (0.0, 0.0, 0.5),
+    (0.75, 0.0, 0.0)]
 
 LINEAR_POS = [0.3, 0.8]
 
@@ -52,6 +54,7 @@ view_menu_ui = """
     </menubar>
 </ui>
 """
+
 
 class SpectrumPlugin(GObject.Object, Peas.Activatable):
     '''
@@ -77,78 +80,88 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
         self.shell = self.object
         self.db = self.shell.props.db
         self.appshell = ApplicationShell(self.shell)
-        
+
         self.toggle_action_group = ActionGroup(self.shell, 'SpectrumPluginActions')
         self.toggle_action_group.add_action(func=self.toggle_visibility,
-            action_name='ToggleSpectrum', label=_("Spectrum"), action_state=ActionGroup.TOGGLE,
-            action_type='app', accel="<Ctrl>s", tooltip=_("Display spectrum for the current playing song"))
+                                            action_name='ToggleSpectrum', label=_("Spectrum"),
+                                            action_state=ActionGroup.TOGGLE,
+                                            action_type='app', accel="<Ctrl>s",
+                                            tooltip=_("Display spectrum for the current playing song"))
         self.appshell.insert_action_group(self.toggle_action_group)
         self.appshell.add_app_menuitems(view_menu_ui, 'SpectrumPluginActions', 'view')
         self.box = None
-        
-        
+
+        self.spectrum = SpectrumPlayer(self.shell)
+
     def do_deactivate(self):
         '''
         Called by Rhythmbox when the plugin is deactivated. It makes sure to
         free all the resources used by the plugin.
         '''
         self.appshell.cleanup()
+        self.spectrum.cleanup()
+
         if self.box:
             self.box.hide()
             self.shell.remove_widget(self.box,
-                                            RB.ShellUILocation.MAIN_BOTTOM)
+                                     RB.ShellUILocation.MAIN_BOTTOM)
         del self.shell
         del self.db
-        
+
     def toggle_visibility(self, action, param=None, data=None):
         action = self.toggle_action_group.get_action('ToggleSpectrum')
-        
+
         if action.get_active():
-            win = SpectrumPlayer()
-            win.show_all()
-            win.initialise(self.shell)
-            self.box = Gtk.Box()
-            self.box.add(win)
-            self.shell.add_widget(self.box,
-                                 RB.ShellUILocation.MAIN_BOTTOM, expand=True, fill=True)
+
+            self.spectrum.initialise(self.shell)
+            self.spectrum.show_all()
+            if not self.box:
+                self.box = Gtk.Box()
+                self.box.add(self.spectrum)
+                self.shell.add_widget(self.box,
+                                      RB.ShellUILocation.MAIN_BOTTOM, expand=True, fill=True)
             self.box.show_all()
         else:
             self.box.hide()
-            self.shell.remove_widget(self.box,
-                                            RB.ShellUILocation.MAIN_BOTTOM)
-            self.box = None
+            #self.spectrum.cleanup()
+
+            #self.shell.remove_widget(self.box,
+            #                         RB.ShellUILocation.MAIN_BOTTOM)
+            #self.box = None
+
 
 class SpectrumPlayer(Gtk.DrawingArea):
     __gsignals__ = {
-        "spectrum-data-found" : (GObject.SIGNAL_RUN_LAST,
-                GObject.TYPE_NONE,
-                (GObject.TYPE_PYOBJECT,))
-                    }
-    def __init__(self):
+        "spectrum-data-found": (GObject.SIGNAL_RUN_LAST,
+                                GObject.TYPE_NONE,
+                                (GObject.TYPE_PYOBJECT,))
+    }
+
+    def __init__(self, shell):
         super(SpectrumPlayer, self).__init__()
-        
+
         # init
+        self.bus_id = None
+        self.player_id = None
+        self.shell = None
+
         self.spect_height = 100
-        self.spect_bands = 16
+        self.spect_bands = 64
         self.spect_atom = 64.0
         self.height_scale = 1.0
         self.band_width = 32
         self.band_interval = 3
         self.spect_data = None
         self.threshold = -60
-        
-        self.spectrum = Gst.ElementFactory.make("spectrum", "spectrum")
-        self.spectrum.set_property("bands", self.spect_bands)
-        self.spectrum.set_property("threshold", self.threshold) # default -60
-        self.spectrum.set_property("post-messages", True)
-        self.spectrum.set_property('message-magnitude', True)
+
+        self.first_initialised = None
 
         self.connect("spectrum-data-found", self.on_event_load_spect)
-        
+
         self.set_size_request(self.adjust_width, self.spect_height)
         self.connect("draw", self.draw_cb)
         self.connect("configure-event", self.on_configure_event)
-        
+
         self.drag_flag = False
         self.mouse_x = self.mouse_y = 0
         self.old_x = self.old_y = 0
@@ -156,22 +169,58 @@ class SpectrumPlayer(Gtk.DrawingArea):
         self.max_magnitude = []
         Gdk.threads_add_timeout(GLib.PRIORITY_DEFAULT_IDLE, 100, self.max_levels, None)
 
+        player = shell.props.shell_player.props.player
+        #player.add_filter(self.spectrum)
+
+        print(player)
+        if not hasattr(player.props, "playbin") or not player.props.playbin:
+            self.player_id = player.connect('notify', self.on_player_notify)
+            print("player id connected")
+        else:
+            bus = player.props.playbin.get_bus()
+            self.bus_id = bus.connect('message', self.message_handler)
+
     def initialise(self, shell):
+        print("initialise")
+        if self.first_initialised:
+            return
+
+        self.first_initialised = True
+        #if self.player_id or self.bus_id:
+        #    return
+
+        self.shell = shell
+
+        self.spectrum = Gst.ElementFactory.make("spectrum", "spectrum")
+        self.spectrum.set_property("bands", int(self.spect_bands))
+        self.spectrum.set_property("threshold", self.threshold)  # default -60
+        self.spectrum.set_property("post-messages", True)
+        self.spectrum.set_property('message-magnitude', True)
+
         player = shell.props.shell_player.props.player
         player.add_filter(self.spectrum)
 
-        print (player)
-        if not player.props.playbin:
-            player.connect('notify', self.on_player_notify)     
-        else:
-            bus = player.props.playbin.get_bus()
-            bus.connect('message', self.message_handler)
-        
+
+    def cleanup(self):
+        if self.player_id:
+            print("player id cleanup")
+            self.disconnect(self.player_id)
+            self.player_id = None
+
+        if self.bus_id:
+            print("bus id cleanup")
+            self.disconnect(self.bus_id)
+            self.bus_id = None
+
+        if self.shell:
+            player = self.shell.props.shell_player.props.player
+            player.remove_filter(self.spectrum)
+
     def message_handler(self, bus, message):
         if message.type == Gst.MessageType.ELEMENT:
             s = message.get_structure()
             name = s.get_name()
-            
+
             if name == "spectrum":
                 waittime = 0
                 #if s.has_field("running_time") and s.has_field("duration"):
@@ -180,27 +229,37 @@ class SpectrumPlayer(Gtk.DrawingArea):
                 #    waittime = timestamp + duration / 2
                 if s.has_field("stream-time") and s.has_field("duration"):
                     waittime = s.get_value("stream-time") + s.get_value("duration")
-                    
+
                 if waittime:
                     # workaround bug where the magnitude field is a type not understood in python
                     fullstr = s.to_string()
-                    magstr = fullstr[fullstr.find('{') + 1 : fullstr.rfind('}') - 1]
+                    magstr = fullstr[fullstr.find('{') + 1: fullstr.rfind('}') - 1]
                     magnitude_list = [float(x) for x in magstr.split(',')]
                     self.emit("spectrum-data-found", magnitude_list)
-                
+
         return True
-                    
+
     def on_player_notify(self, widget, spec):
+        print("notify")
+        print(spec.name)
+
+        if self.bus_id:
+            return
+
         if spec.name == "playbin":
             playbin = widget.get_property('playbin')
             bus = playbin.get_bus()
-            bus.connect('message', self.message_handler)
-                
+        elif spec.name == "bus":
+            bus = widget.get_property('bus')
+
+        if bus:
+            self.bus_id = bus.connect('message', self.message_handler)
+
     def on_player_tee_removed(self, pbin, tee, element):
         if element != self.spectrum:
             return
         self.spectrum.set_state(gst.STATE_NULL)
-        
+
     @property
     def adjust_width(self):
         return (self.band_width + self.band_interval) * self.spect_bands
@@ -213,14 +272,13 @@ class SpectrumPlayer(Gtk.DrawingArea):
         for i in range(int(self.spect_bands)):
 
             if self.max_magnitude[i] > max_value:
-                print (self.max_magnitude[i])
                 self.max_magnitude[i] -= 1
 
         return True
-        
+
     def draw_cb(self, widget, cr):
         rect = widget.get_allocation()
-        
+
         cr.set_operator(cairo.OPERATOR_SOURCE)
         #cr.set_source_rgba(1.0, 1.0, 1.0, 0.0)
         context = self.get_toplevel().get_style_context()
@@ -228,12 +286,12 @@ class SpectrumPlayer(Gtk.DrawingArea):
         Gdk.cairo_set_source_rgba(cr, bg_colour)
         cr.rectangle(0, 0, rect.width, rect.height)
         cr.fill()
-        
+
         cr.set_operator(cairo.OPERATOR_OVER)
         self.draw_spectrum(cr)
         return True
-        
-        
+
+
     def delayed_idle_spectrum_update(self, spect):
         self.spect_data = spect
         for i in range(int(self.spect_bands)):
@@ -241,9 +299,9 @@ class SpectrumPlayer(Gtk.DrawingArea):
                 self.max_magnitude[i] = spect[i]
 
         self.queue_draw()
-        
+
         return False
-    
+
     def on_event_load_spect(self, obj, magnitude_list):
         spect = [i * self.height_scale for i in magnitude_list]
 
@@ -255,22 +313,22 @@ class SpectrumPlayer(Gtk.DrawingArea):
         #    print ('band %d freq %g mag %f' % (i, freq, mag))
 
         GLib.idle_add(self.delayed_idle_spectrum_update, spect)
-    
+
     def on_configure_event(self, widget, event):
-        print ("on_configure_event")
+        print("on_configure_event")
         self.spect_height = event.height
         self.height_scale = event.height / self.spect_atom
         self.spect_bands = event.width / (self.band_width + self.band_interval)
-        
+
         self.spectrum.set_property("bands", int(self.spect_bands))
 
-        self.max_magnitude=[]
-        print (self.height_scale)
+        self.max_magnitude = []
+        print(self.height_scale)
         for i in range(int(self.spect_bands)):
             self.max_magnitude.append(self.threshold * self.height_scale)
 
         return False
-    
+
     def draw_spectrum(self, cr):
         start = 5
         data = self.spect_data
@@ -282,7 +340,7 @@ class SpectrumPlayer(Gtk.DrawingArea):
 
                 cr.set_line_width(1.5)
                 min_pos = 0
-                cr.move_to(start, min_pos  - self.max_magnitude[i])
+                cr.move_to(start, min_pos - self.max_magnitude[i])
                 cr.line_to(start + self.band_width, min_pos - self.max_magnitude[i])
                 cr.stroke()
 
@@ -294,9 +352,9 @@ class SpectrumPlayer(Gtk.DrawingArea):
                                                each_linear[0],
                                                each_linear[1],
                                                each_linear[2])
-            
+
                     cr.set_source(pattern)
-                
+
                 cr.rectangle(*rect)
                 cr.fill()
                 cr.pop_group_to_source()
