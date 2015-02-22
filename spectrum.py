@@ -69,6 +69,7 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
         Initialises the plugin object.
         '''
         GObject.Object.__init__(self)
+        self.scroll = None
 
     def do_activate(self):
         '''
@@ -89,9 +90,11 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
                                             tooltip=_("Display spectrum for the current playing song"))
         self.appshell.insert_action_group(self.toggle_action_group)
         self.appshell.add_app_menuitems(view_menu_ui, 'SpectrumPluginActions', 'view')
-        self.box = None
+        self.scroll = None
 
         self.spectrum = SpectrumPlayer(self.shell)
+
+        self.play_id = self.shell.props.shell_player.connect('playing-changed', self.playing_changed)
 
     def do_deactivate(self):
         '''
@@ -101,28 +104,39 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
         self.appshell.cleanup()
         self.spectrum.cleanup()
 
-        if self.box:
-            self.box.hide()
-            self.shell.remove_widget(self.box,
-                                     RB.ShellUILocation.MAIN_BOTTOM)
+        self.shell.props.shell_player.disconnect(self.play_id)
+
+        if self.scroll:
+            self.scroll.hide()
+            self.shell.remove_widget(self.scroll,
+                                     RB.ShellUILocation.SIDEBAR) #MAIN_BOTTOM, RIGHT_SIDEBAR
         del self.shell
         del self.db
+
+    def playing_changed(self, shell_player, playing):
+        print (playing)
+        GLib.idle_add(self._make_visible, playing)
 
     def toggle_visibility(self, action, param=None, data=None):
         action = self.toggle_action_group.get_action('ToggleSpectrum')
 
-        if action.get_active():
+        self._make_visible(action.get_active())
+
+    def _make_visible(self, playing):
+        if playing:
 
             self.spectrum.initialise(self.shell)
             self.spectrum.show_all()
-            if not self.box:
-                self.box = Gtk.Box()
-                self.box.add(self.spectrum)
-                self.shell.add_widget(self.box,
-                                      RB.ShellUILocation.MAIN_BOTTOM, expand=True, fill=True)
-            self.box.show_all()
+            if not self.scroll:
+                self.scroll = Gtk.ScrolledWindow()#Gtk.Box()
+                self.scroll.add(self.spectrum)
+                self.scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+                self.scroll.set_resize_mode(Gtk.ResizeMode.QUEUE)
+                self.shell.add_widget(self.scroll,
+                                      RB.ShellUILocation.SIDEBAR, expand=False, fill=True)
+            self.scroll.show_all()
         else:
-            self.box.hide()
+            self.scroll.hide()
             #self.spectrum.cleanup()
 
             #self.shell.remove_widget(self.box,
@@ -145,11 +159,13 @@ class SpectrumPlayer(Gtk.DrawingArea):
         self.player_id = None
         self.shell = None
 
+        self.max_bands = 64
+        self.min_band_width = 4
         self.spect_height = 100
-        self.spect_bands = 64
-        self.spect_atom = 64.0
+        self.spect_bands = self.max_bands
+        self.spect_atom = float(self.max_bands)
         self.height_scale = 1.0
-        self.band_width = 32
+        self.band_width = self.min_band_width
         self.band_interval = 3
         self.spect_data = None
         self.threshold = -60
@@ -158,7 +174,9 @@ class SpectrumPlayer(Gtk.DrawingArea):
 
         self.connect("spectrum-data-found", self.on_event_load_spect)
 
-        self.set_size_request(self.adjust_width, self.spect_height)
+        #self.set_size_request(self.adjust_width, self.spect_height)
+        self.props.hexpand = True
+        #self.props.vexpand = True
         self.connect("draw", self.draw_cb)
         self.connect("configure-event", self.on_configure_event)
 
@@ -272,7 +290,7 @@ class SpectrumPlayer(Gtk.DrawingArea):
         for i in range(int(self.spect_bands)):
 
             if self.max_magnitude[i] > max_value:
-                self.max_magnitude[i] -= 1
+                self.max_magnitude[i] -= 1  # need to make this relative to the height
 
         return True
 
@@ -294,6 +312,8 @@ class SpectrumPlayer(Gtk.DrawingArea):
 
     def delayed_idle_spectrum_update(self, spect):
         self.spect_data = spect
+        #print (len(self.max_magnitude))
+        #print (range(int(self.spect_bands)))
         for i in range(int(self.spect_bands)):
             if -spect[i] < -self.max_magnitude[i]:
                 self.max_magnitude[i] = spect[i]
@@ -316,9 +336,24 @@ class SpectrumPlayer(Gtk.DrawingArea):
 
     def on_configure_event(self, widget, event):
         print("on_configure_event")
+        print (event.width)
         self.spect_height = event.height
         self.height_scale = event.height / self.spect_atom
         self.spect_bands = event.width / (self.band_width + self.band_interval)
+
+        if self.spect_bands >= self.max_bands:
+            self.spect_bands = self.max_bands
+
+            self.band_width = event.width / (self.max_bands + self.band_interval)
+
+        if self.spect_bands < self.max_bands:
+            self.band_width = event.width / (self.max_bands + self.band_interval)
+
+            if self.band_width < self.min_band_width:
+                self.band_width = self.min_band_width
+                self.spect_bands = event.width / (self.band_width + self.band_interval)
+            else:
+                self.spect_bands = self.max_bands
 
         self.spectrum.set_property("bands", int(self.spect_bands))
 
