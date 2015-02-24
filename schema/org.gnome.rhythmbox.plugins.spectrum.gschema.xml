@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+    <schema path="/org/gnome/rhythmbox/plugins/spectrum/" id="org.gnome.rhythmbox.plugins.spectrum">
+        <key type="i" name="position">
+            <default>1</default>
+            <summary>spectrum position</summary>
+            <description>spectrum position.</description>
+        </key>
+    </schema>
+</schemalist>

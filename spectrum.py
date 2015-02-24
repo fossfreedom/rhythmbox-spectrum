@@ -27,10 +27,13 @@ from gi.repository import GObject
 from gi.repository import Peas
 from gi.repository import Gdk
 from gi.repository import RB
+from gi.repository import Gio
 import cairo
 
 from spectrum_rb3compat import ActionGroup
 from spectrum_rb3compat import ApplicationShell
+from spectrum_prefs import Preferences
+from spectrum_prefs import GSetting
 
 
 Rect = namedtuple('Rectangle', 'x y width height')
@@ -40,8 +43,8 @@ Rect = namedtuple('Rectangle', 'x y width height')
 #                 (1.0, 0.8392156862745098, 0.19215686274509805)]
 
 LINEAR_COLORS = [
-    (0.0, 0.0, 0.5),
-    (0.75, 0.0, 0.0)]
+    (0.75, 0.0, 0.0),
+    (0.0, 0.0, 0.5)]
 
 LINEAR_POS = [0.3, 0.8]
 
@@ -63,6 +66,10 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
     '''
     __gtype_name = 'SpectrumPlugin'
     object = GObject.property(type=GObject.Object)
+
+    # properties
+    position = GObject.property(type=int, default=0)
+
 
     def __init__(self):
         '''
@@ -92,6 +99,9 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
         self.appshell.add_app_menuitems(view_menu_ui, 'SpectrumPluginActions', 'view')
         self.scroll = None
 
+        self._connect_properties()
+        self._connect_signals()
+
         self.spectrum = SpectrumPlayer(self.shell)
 
         self.play_id = self.shell.props.shell_player.connect('playing-changed', self.playing_changed)
@@ -109,12 +119,50 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
         if self.scroll:
             self.scroll.hide()
             self.shell.remove_widget(self.scroll,
-                                     RB.ShellUILocation.SIDEBAR) #MAIN_BOTTOM, RIGHT_SIDEBAR
+                                     self.current_location) #MAIN_BOTTOM, RIGHT_SIDEBAR
         del self.shell
         del self.db
 
+    def _connect_properties(self):
+        gs = GSetting()
+        setting = gs.get_setting(gs.Path.PLUGIN)
+
+        setting.bind(gs.PluginKey.POSITION, self, 'position',
+                     Gio.SettingsBindFlags.GET)
+
+    def _connect_signals(self):
+        self.connect('notify::position', self._on_position_changed)
+
+    def _get_rb_location(self):
+        if self.position == 1:
+            new_location = RB.ShellUILocation.SIDEBAR
+        else:
+            new_location = RB.ShellUILocation.MAIN_BOTTOM
+        
+        return new_location
+
+    def _on_position_changed(self, *args):
+        if not self.scroll or self.position == 0:
+            return
+
+
+        visible = self.scroll.get_visible()
+
+        new_location = self._get_rb_location()
+
+        self.scroll.hide()
+        self.spectrum.cleanup()
+        del self.spectrum
+        self.shell.remove_widget(self.scroll,
+                                     self.current_location)
+        del self.scroll
+        self.spectrum = SpectrumPlayer(self.shell)
+        self.scroll = None
+        self.current_location = new_location
+
+        GLib.idle_add(self._make_visible, visible)
+        
     def playing_changed(self, shell_player, playing):
-        print (playing)
         GLib.idle_add(self._make_visible, playing)
 
     def toggle_visibility(self, action, param=None, data=None):
@@ -132,17 +180,14 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
                 self.scroll.add(self.spectrum)
                 self.scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
                 self.scroll.set_resize_mode(Gtk.ResizeMode.QUEUE)
+
+                self.current_location = self._get_rb_location()
                 self.shell.add_widget(self.scroll,
-                                      RB.ShellUILocation.SIDEBAR, expand=False, fill=True)
+                                      self.current_location, expand=False, fill=True)
             self.scroll.show_all()
         else:
             self.scroll.hide()
-            #self.spectrum.cleanup()
-
-            #self.shell.remove_widget(self.box,
-            #                         RB.ShellUILocation.MAIN_BOTTOM)
-            #self.box = None
-
+            
 
 class SpectrumPlayer(Gtk.DrawingArea):
     __gsignals__ = {
@@ -185,7 +230,7 @@ class SpectrumPlayer(Gtk.DrawingArea):
         self.old_x = self.old_y = 0
 
         self.max_magnitude = []
-        Gdk.threads_add_timeout(GLib.PRIORITY_DEFAULT_IDLE, 100, self.max_levels, None)
+        Gdk.threads_add_timeout(GLib.PRIORITY_DEFAULT_IDLE, 400, self.max_levels, None)
 
         player = shell.props.shell_player.props.player
         #player.add_filter(self.spectrum)
@@ -284,14 +329,14 @@ class SpectrumPlayer(Gtk.DrawingArea):
 
     def max_levels(self, *args):
         if len(self.max_magnitude) == 0:
-            return
+            return True
 
         max_value = self.threshold * self.height_scale
         for i in range(int(self.spect_bands)):
 
             if self.max_magnitude[i] > max_value:
-                self.max_magnitude[i] -= 1  # need to make this relative to the height
-
+                self.max_magnitude[i] -= 1 
+                
         return True
 
     def draw_cb(self, widget, cr):
@@ -360,7 +405,10 @@ class SpectrumPlayer(Gtk.DrawingArea):
         self.max_magnitude = []
         print(self.height_scale)
         for i in range(int(self.spect_bands)):
+            #print (i)
             self.max_magnitude.append(self.threshold * self.height_scale)
+            
+        print (self.max_magnitude)
 
         return False
 
@@ -395,4 +443,9 @@ class SpectrumPlayer(Gtk.DrawingArea):
                 cr.pop_group_to_source()
                 cr.paint_with_alpha(0.5)
                 start += self.band_width + self.band_interval
+
+    def _import(self):
+        # stop PyCharm removing the Preference import on optimisation
+        pref = Preferences()
+
                 
