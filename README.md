@@ -12,10 +12,13 @@ Add a visual spectrum analyzer to Rhythmbox
 To install the plugin:
 
 <pre>
-cd ~/.local/share/rhythmbox.plugins
+cd ~/Downloads
 git clone https://github.com/fossfreedom/rhythmbox-spectrum.git
+cd rhythmbox-spectrum
+./install.sh
 </pre>
 
 Then enable the plugin in the plugins window.
 
-Toggle the spectrum analyzer via the new View Spectrum menu option
+Toggle the spectrum analyzer via the new View Spectrum menu option or just play
+Use the plugin preferences to move the spectrum left/bottom of the display
