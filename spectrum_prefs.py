@@ -186,7 +186,8 @@ class Preferences(GObject.Object, PeasGtk.Configurable):
             self.sidebar_position_radiobutton.set_active(True)
         else:
             self.bottom_position_radiobutton.set_active(True)
-        
+
+        self.builder = builder
         # return the dialog
         self._first_run = False
         print("end create dialog contents")
@@ -195,6 +196,7 @@ class Preferences(GObject.Object, PeasGtk.Configurable):
     def on_position_radiobutton_toggled(self, button):
         if button.get_active():
             gs = GSetting()
+            print (self.builder)
             if button == self.sidebar_position_radiobutton:
                 self.settings[gs.PluginKey.POSITION] = 1
             else:

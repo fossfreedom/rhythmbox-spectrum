@@ -185,7 +185,7 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
                 self.shell.add_widget(self.scroll,
                                       self.current_location, expand=False, fill=True)
             self.scroll.show_all()
-        else:
+        elif self.scroll:
             self.scroll.hide()
             
 
