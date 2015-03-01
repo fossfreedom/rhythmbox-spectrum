@@ -31,9 +31,7 @@ from gi.repository import Gdk
 from gi.repository import GLib
 
 import rb
-from stars import ReactiveStar
-from stars import StarSize
-import coverart_rb3compat as rb3compat
+import spectrum_rb3compat as rb3compat
 
 
 class GSetting:
