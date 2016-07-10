@@ -135,8 +135,10 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
 
     def _get_rb_location(self):
         if self.position == 1:
+            print ("sidebar")
             new_location = RB.ShellUILocation.SIDEBAR
         else:
+            print ("bottom")
             new_location = RB.ShellUILocation.MAIN_BOTTOM
         
         return new_location
@@ -183,7 +185,9 @@ class SpectrumPlugin(GObject.Object, Peas.Activatable):
 
                 self.current_location = self._get_rb_location()
                 self.shell.add_widget(self.scroll,
-                                      self.current_location, expand=False, fill=True)
+                                      self.current_location, expand=True, fill=True)
+                # temporarily change expand to True - something has happened in latest GTK 3,18 and later that
+                # fails to give the right size allocation to new objects
             self.scroll.show_all()
         elif self.scroll:
             self.scroll.hide()
@@ -254,6 +258,7 @@ class SpectrumPlayer(Gtk.DrawingArea):
 
         self.shell = shell
 
+        Gst.init([])
         self.spectrum = Gst.ElementFactory.make("spectrum", "spectrum")
         self.spectrum.set_property("bands", int(self.spect_bands))
         self.spectrum.set_property("threshold", self.threshold)  # default -60
@@ -400,6 +405,10 @@ class SpectrumPlayer(Gtk.DrawingArea):
             else:
                 self.spect_bands = self.max_bands
 
+        print (int(self.spect_bands))
+        if int(self.spect_bands) == 0:
+            return False
+            
         self.spectrum.set_property("bands", int(self.spect_bands))
 
         self.max_magnitude = []
@@ -417,6 +426,8 @@ class SpectrumPlayer(Gtk.DrawingArea):
         data = self.spect_data
         if data:
             for i in range(int(self.spect_bands)):
+                if i < 2:
+                    continue # ignore the bottom end of the spectrum
                 cr.push_group()
                 cr.set_source_rgb(0, 1, 1)
                 rect = Rect(start, -data[i], self.band_width, self.spect_height + data[i])
